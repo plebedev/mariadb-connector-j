@@ -61,6 +61,7 @@ import org.mariadb.jdbc.internal.protocol.Protocol;
 import org.mariadb.jdbc.internal.util.dao.ReconnectDuringTransactionException;
 import org.mariadb.jdbc.internal.util.pool.GlobalStateInfo;
 
+import java.io.IOException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -70,6 +71,14 @@ import java.util.List;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.xbill.DNS.CNAMERecord;
+import org.xbill.DNS.DClass;
+import org.xbill.DNS.Lookup;
+import org.xbill.DNS.Message;
+import org.xbill.DNS.Name;
+import org.xbill.DNS.Record;
+import org.xbill.DNS.Section;
+import org.xbill.DNS.Type;
 
 public class AuroraListener extends MastersSlavesListener {
 
@@ -103,34 +112,92 @@ public class AuroraListener extends MastersSlavesListener {
      * @return cluster host address
      */
     private HostAddress findClusterHostAddress(UrlParser urlParser) throws SQLException {
-        List<HostAddress> hostAddresses = urlParser.getHostAddresses();
-        Matcher matcher;
-        for (HostAddress hostAddress : hostAddresses) {
-            matcher = auroraDnsPattern.matcher(hostAddress.host);
-            if (matcher.find()) {
+      final List<HostAddress> hostAddresses = urlParser.getHostAddresses();
+      Matcher matcher;
+      for (final HostAddress hostAddress : hostAddresses) {
+         matcher = this.auroraDnsPattern.matcher(hostAddress.host);
+         if (matcher.find()) {
 
-                if (clusterDnsSuffix != null) {
-                    //ensure there is only one cluster
-                    if (!clusterDnsSuffix.equalsIgnoreCase(matcher.group(3))) {
-                        throw new SQLException("Connection string must contain only one aurora cluster. "
-                                + "'" + hostAddress.host + "' doesn't correspond to DNS prefix '" + clusterDnsSuffix + "'");
-                    }
-                } else {
-                    clusterDnsSuffix = matcher.group(3);
-                }
-
-                if (matcher.group(2) != null && !matcher.group(2).isEmpty()) {
-                    //not just an instance entry-point, but cluster entrypoint.
-                    return hostAddress;
-                }
-            } else {
-                if (clusterDnsSuffix == null && hostAddress.host.contains(".")) {
-                    clusterDnsSuffix = hostAddress.host.substring(hostAddress.host.indexOf(".") + 1);
-                }
+            if (this.clusterDnsSuffix != null) {
+               // ensure there is only one cluster
+               if (!this.clusterDnsSuffix.equalsIgnoreCase(matcher.group(3))) {
+                  throw new SQLException("Connection string must contain only one aurora cluster. " +
+                     "'" + hostAddress.host + "' doesn't correspond to DNS prefix '" +
+                     this.clusterDnsSuffix + "'");
+               }
             }
-        }
-        return null;
-    }
+            else {
+               this.clusterDnsSuffix = matcher.group(3);
+            }
+
+            if (matcher.group(2) != null && !matcher.group(2).isEmpty()) {
+               // not just an instance entry-point, but cluster entrypoint.
+               return hostAddress;
+            }
+         }
+         else {
+            matcher = this.resolveAndMatchHostAddress(hostAddress.host);
+            if (matcher != null) {
+
+               if (this.clusterDnsSuffix != null) {
+                  // ensure there is only one cluster
+                  if (!this.clusterDnsSuffix.equalsIgnoreCase(matcher.group(3))) {
+                     throw new SQLException(
+                        "Connection string must contain only one aurora cluster. " + "'" +
+                           matcher.group(0) + "' doesn't correspond to DNS prefix '" +
+                           this.clusterDnsSuffix + "'");
+                  }
+               }
+               else {
+                  this.clusterDnsSuffix = matcher.group(3);
+               }
+
+               if (matcher.group(2) != null && !matcher.group(2).isEmpty()) {
+                  // not just an instance entry-point, but cluster entrypoint.
+                  return hostAddress;
+               }
+            }
+            else if (this.clusterDnsSuffix == null && hostAddress.host.indexOf(".") > -1) {
+               this.clusterDnsSuffix = hostAddress.host.substring(hostAddress.host.indexOf(".") + 1);
+            }
+         }
+      }
+      return null;
+   }
+   
+   /**
+    * {@linkplain Lookup Looks up} {@linkplain Type#A 'A'} DNS records of the given host, and returns 
+    * a matcher for the first {@linkplain CNAMERecord CNAME} record, whose 
+    * {@linkplain CNAMERecord#getTarget target} matches {@link #auroraDnsPattern}, or null if no such
+    * record exixst.
+    *
+    * @pre host != null
+    */ 
+   private Matcher resolveAndMatchHostAddress(String host) {
+      assert host != null;
+
+      try {
+         final Name name = new Name(host + '.');
+         final Record question = Record.newRecord(name, Type.A, DClass.IN);
+         final Message query = Message.newQuery(question);
+
+         final Message response = Lookup.getDefaultResolver().send(query);
+         final Record[] records = response.getSectionArray(Section.ANSWER);
+         for (final Record record : records) {
+            if (record instanceof CNAMERecord) {
+               final CNAMERecord cname = (CNAMERecord)record;
+               final Matcher matcher = this.auroraDnsPattern.matcher(cname.getTarget().toString());
+
+               if (matcher.find()) return matcher;
+            }
+         }
+      }
+      catch (final IOException e) {
+         // Ignore. If we can't resolve DNS alias, just return null and let the caller deal with it.
+      }
+
+      return null;
+   }
 
     public HostAddress getClusterHostAddress() {
         return clusterHostAddress;

@@ -58,7 +58,7 @@
     <artifactId>mariadb-java-client</artifactId>
     <packaging>jar</packaging>
     <name>mariadb-java-client</name>
-    <version>1.7.2</version>
+    <version>1.7.2-1</version>
     <description>JDBC driver for MariaDB and MySQL</description>
     <url>https://mariadb.com/kb/en/mariadb/about-mariadb-connector-j/</url>
 
@@ -396,5 +396,11 @@
             <version>1.10.76</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+         <groupId>dnsjava</groupId>
+         <artifactId>dnsjava</artifactId>
+         <version>2.1.6</version>
+         <scope>compile</scope>
+      </dependency>
     </dependencies>
 </project>
